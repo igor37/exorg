@@ -176,15 +176,55 @@ impl Exporter {
             src_lines.pop();
         }
 
-        let mut output_name = "output".to_string();
-        for (lang, suffix) in &self.langs {
-            if lang == target {
-                output_name = format!("{}.{}", output_name, suffix);
-            }
-        }
-
+        let mut output_name = self.output_file_name(target);
         write_file(&output_name, &src_lines)?;
         Ok(())
+    }
+
+    fn output_file_name(&self, target: &String) -> String {
+        let input_file = self.input_path.split('/').last().unwrap();
+        let prefix     = input_file.split('.').nth(0).unwrap();
+
+        match target.as_str() {
+            "awk"                     => format!("{}.awk", prefix),
+            "bash" | "sh" | "shell"   => format!("{}.sh", prefix),
+            "c"                       => format!("{}.c", prefix),
+            "cpp" | "c++"             => format!("{}.cpp", prefix),
+            "csharp" | "c#" | "cs"    => format!("{}.cs", prefix),
+            "css"                     => format!("{}.css", prefix),
+            "d"                       => format!("{}.d", prefix),
+            "emacs-lisp"              => format!("{}.el", prefix),
+            "go"                      => format!("{}.go", prefix),
+            "html"                    => format!("{}.html", prefix),
+            "java"                    => format!("{}.java", prefix),
+            "js"                      => format!("{}.js", prefix),
+            "json"                    => format!("{}.json", prefix),
+            "julia"                   => format!("{}.jl", prefix),
+            "jupyter"                 => format!("{}.ipynb", prefix),
+            "latex"                   => format!("{}.tex", prefix),
+            "lua"                     => format!("{}.lua", prefix),
+            "markdown"                => format!("{}.md", prefix),
+            "ocaml"                   => format!("{}.ml", prefix),
+            "perl"                    => format!("{}.pl", prefix),
+            "php"                     => format!("{}.php", prefix),
+            "prolog"                  => format!("{}.pl", prefix),
+            "python"                  => format!("{}.py", prefix),
+            "r"                       => format!("{}.r", prefix),
+            "ruby"                    => format!("{}.rb", prefix),
+            "rust"                    => format!("{}.rs", prefix),
+            "sql"                     => format!("{}.sql", prefix),
+            "toml"                    => format!("{}.toml", prefix),
+            "yaml"                    => format!("{}.yml", prefix),
+            // if unknown, check if the suffix was defined in the input file
+            _ => {
+                for (lang, suffix) in &self.langs {
+                    if lang == target {
+                        return format!("{}.{}", prefix, suffix);
+                    }
+                }
+                prefix.to_string()
+            },
+        }
     }
 
     /// Generate syntax for a jupyter notebook(aka json) file.
