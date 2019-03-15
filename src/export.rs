@@ -133,7 +133,9 @@ impl Exporter {
 
         // collect relevant source code snippets
         let mut target_blocks: Vec<SrcBlock> = self.src_blocks.iter()
-                                                .filter(|b| &b.lang == target)
+                                                .filter(|b| &b.lang == target ||
+                                                        (&b.lang == "python" &&
+                                                         target  == "jupyter"))
                                                 .map(|b| b.clone())
                                                 .collect();
 
@@ -164,11 +166,15 @@ impl Exporter {
             None => {},
         }
 
-        for block in target_blocks {
-            src_lines.append(&mut block.lines.clone());
-            src_lines.push(String::new());
+        if target == "jupyter" {
+            src_lines = Exporter::build_jupyter_notebook(&target_blocks);
+        } else {
+            for block in target_blocks {
+                src_lines.append(&mut block.lines.clone());
+                src_lines.push(String::new());
+            }
+            src_lines.pop();
         }
-        src_lines.pop();
 
         let mut output_name = "output".to_string();
         for (lang, suffix) in &self.langs {
@@ -180,4 +186,73 @@ impl Exporter {
         write_file(&output_name, &src_lines)?;
         Ok(())
     }
+
+    /// Generate syntax for a jupyter notebook(aka json) file.
+    /// Only exports Python code, no Markdown blocks.
+    fn build_jupyter_notebook(blocks: &Vec<SrcBlock>) -> Vec<String> {
+        let mut clines = Vec::new();
+        clines.push("{".to_string());
+        // write cells
+        clines.push(" \"cells\": [".to_string());
+
+        for block in blocks {
+            clines.push("  {".to_string());
+            clines.push("   \"cell_type\": \"code\",".to_string());
+            clines.push("   \"execution_count\": null,".to_string());
+            clines.push("   \"metadata\": {},".to_string());
+            clines.push("   \"outputs\": [],".to_string());
+            clines.push("   \"source\": [".to_string());
+
+            let len = block.lines.len();
+            for k in 0..len {
+                let escaped = block.lines[k].replace("\\", "\\\\")
+                                            .replace("\"", "\\\"")
+                                            .replace("\t", "    ");
+                let line = if k < len-1 {
+                    format!("    \"{}\\n\",", escaped)
+                } else {
+                    format!("    \"{}\\n\"", escaped)
+                };
+                clines.push(line);
+            }
+
+            let clen = clines.len();
+            clines[clen-1] = clines[clen-1].replace("\\n", "");
+
+            clines.push("   ]".to_string());
+            clines.push("  },".to_string());
+        }
+
+        // the } of the last cell shouldn't be followed by a comma
+        let clen = clines.len();
+        clines[clen-1] = "  }".to_string();
+
+        // write metadata
+        clines.push(" ],".to_string());
+        clines.push(" \"metadata\": {".to_string());
+        clines.push("  \"kernelspec\": {".to_string());
+        clines.push("   \"display_name\": \"Python 3\",".to_string());
+        clines.push("   \"language\": \"python\",".to_string());
+        clines.push("   \"name\": \"python3\"".to_string());
+        clines.push("  },".to_string());
+        clines.push("  \"language_info\": {".to_string());
+        clines.push("   \"codemirror_mode\": {".to_string());
+        clines.push("    \"name\": \"ipython\",".to_string());
+        clines.push("    \"version\": 3".to_string());
+        clines.push("   },".to_string());
+        clines.push("   \"file_extension\": \".py\",".to_string());
+        clines.push("   \"mimetype\": \"text/x-python\",".to_string());
+        clines.push("   \"name\": \"python\",".to_string());
+        clines.push("   \"nbconvert_exporter\": \"python\",".to_string());
+        clines.push("   \"pygments_lexer\": \"ipython3\",".to_string());
+        clines.push("   \"version\": \"3.6.4\"".to_string());
+        clines.push("  }".to_string());
+        clines.push(" },".to_string());
+        clines.push(" \"nbformat\": 4,".to_string());
+        clines.push(" \"nbformat_minor\": 2".to_string());
+        clines.push("}".to_string());
+
+        clines
+    }
+        
 }

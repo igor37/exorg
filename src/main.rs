@@ -40,20 +40,22 @@ fn read_cli_args(args: Vec<String>) -> Option<(String, String, Option<String>)> 
 }
 
 fn print_help() {
-    // TODO document more precisely how e.g. programming language handling should be defined inside
-    // source file
     let msg = r#"
 usage:  borg <format> <file> [<block name>]
         borg [--help]
     
 arguments:
 
-    <format>        output format, valid choices are either "pdf"(requires emacs
-                    and latex) or the name of the programming language to be
-                    exported.
+    <format>        output format, valid choices:
+                        - pdf       (requires installed emacs and pdflatex)
+                        - jupyter
+                        - custom format, defined in .org file via
+                                '#+SRC_LANG: <language name> <file suffix>'
+                           e.g. '#+SRC_LANG: rust rs'
 
     <block name>    name of a specific code block to be extracted. If this block
                     depends on other blocks, those will be included as well.
+                    (set via '#+NAME: <name>' before src block)
 
     --help          print this message and exit
     "#; 
