@@ -1,10 +1,7 @@
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum ErrorKind {
-    FileOpenError,
-    FileReadError,
-    FileCreationError,
-    FileWriteError,
+    FileError{ msg: String },
     EmacsCallFailed,
     PdfLatexCallFailed,
     InvalidOutputFormat,

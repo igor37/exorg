@@ -223,7 +223,7 @@ impl Exporter {
             }
             // replace all verbatim src blocks
             if line.contains("begin") && line.contains("{verbatim}") &&
-                                lines[i+1] == self.src_blocks[src_idx].lines[0] {
+                        lines[i+1].trim() == self.src_blocks[src_idx].lines[0].trim() {
                 src_block = true;
                 result.push(format!("\\begin{{minted}}{{{}}}",
                                     self.src_blocks[src_idx].lang));
