@@ -141,7 +141,7 @@ impl Exporter {
             match Command::new("pdflatex")
                         .arg("-shell-escape")
                         .arg(&tex_file_path)
-                        .spawn() {
+                        .output() {
                 Err(_) => return Err(ErrorKind::PdfLatexCallFailed),
                 Ok(_)  => {},
             }
