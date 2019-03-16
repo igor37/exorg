@@ -10,7 +10,7 @@ mod export;
 use export::Exporter;
 
 fn main() {
-    let mut args: Vec<String> = env::args().collect();
+    let args: Vec<String> = env::args().collect();
     let (format, filename, block) = match read_cli_args(args) {
         None    => return,
         Some(s) => s,
@@ -47,7 +47,8 @@ usage:  borg <format> <file> [<block name>]
 arguments:
 
     <format>        output format, valid choices:
-                        - pdf       (requires installed emacs and pdflatex)
+                        - pdf           (requires installed emacs and pdflatex)
+                        - pdf-minted    (much nicer-looking source code)
                         - jupyter
                         - custom format, defined in .org file via
                                 '#+SRC_LANG: <language name> <file suffix>'

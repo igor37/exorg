@@ -34,8 +34,12 @@ impl Exporter {
 
     pub fn export(&self, format: &String, block: &Option<String>) -> Result<(), ErrorKind> {
         let lower = format.to_lowercase();
-        if &lower == "pdf" {
-            self.weave()?;
+        if lower.starts_with("pdf") {
+            match lower.as_str() {
+                "pdf"        => self.weave(false)?,
+                "pdf-minted" => self.weave(true)?,
+                _ => return Err(ErrorKind::InvalidOutputFormat),
+            }
         } else {
             self.tangle(&lower, block)?;
         }
@@ -110,20 +114,43 @@ impl Exporter {
     }
 
     /// PDF/LaTeX
-    fn weave(&self) -> Result<(), ErrorKind> {
-        let lisp_cmd = "(progn (setq org-confirm-babel-evaluate nil) (org-latex-export-to-pdf) (kill-emacs))";
+    fn weave(&self, minted: bool) -> Result<(), ErrorKind> {
+        let tex_cmd = "(org-latex-export-to-latex)";
+        let pdf_cmd = "(org-latex-export-to-pdf)";
+        let full_cmd = if minted {
+            format!("(progn (setq org-confirm-babel-evaluate nil) {} (kill-emacs))", tex_cmd)
+        } else {
+            format!("(progn (setq org-confirm-babel-evaluate nil) {} (kill-emacs))", pdf_cmd)
+        };
+
         let result = Command::new("emacs")
             .arg(&self.input_path)
             .arg("--batch")
             .arg("--eval")
-            .arg(lisp_cmd)
+            .arg(full_cmd)
             .output();
 
+        // open .tex file and substitute verbatim blocks with minted src blocks,
+        // then compile to pdf
+        if minted {
+            let tex_file_path = self.output_file_name(&"latex".to_string());
+            let lines         = self.mint_tex( &read_file(&tex_file_path)? );
+            write_file( &tex_file_path,
+                        &lines )?;
+
+            match Command::new("pdflatex")
+                        .arg("-shell-escape")
+                        .arg(&tex_file_path)
+                        .spawn() {
+                Err(_) => return Err(ErrorKind::PdfLatexCallFailed),
+                Ok(_)  => {},
+            }
+        }
         // println!("{:?}", result);
 
         match result {
-            Err(_)  => Err(ErrorKind::EmacsCallFailed),
-            Ok(msg) => Ok(()),
+            Err(_) => Err(ErrorKind::EmacsCallFailed),
+            Ok(_)  => Ok(()),
         }
     }
 
@@ -176,9 +203,41 @@ impl Exporter {
             src_lines.pop();
         }
 
-        let mut output_name = self.output_file_name(target);
+        let output_name = self.output_file_name(target);
         write_file(&output_name, &src_lines)?;
         Ok(())
+    }
+
+    fn mint_tex(&self, lines: &Vec<String>) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut src_idx = 0;
+        let mut src_block = false;
+        let mut pkg = false;
+
+        for i in 0..lines.len() {
+            let line = lines[i].clone();
+            // add import for minted package in header area
+            if !pkg && line.starts_with("\\usepackage") {
+                result.push("\\usepackage{minted}".to_string());
+                pkg = true;
+            }
+            // replace all verbatim src blocks
+            if line.contains("begin") && line.contains("{verbatim}") &&
+                                lines[i+1] == self.src_blocks[src_idx].lines[0] {
+                src_block = true;
+                result.push(format!("\\begin{{minted}}{{{}}}",
+                                    self.src_blocks[src_idx].lang));
+            } else if line.contains("end") && line.contains("{verbatim}") &&
+                                                                    src_block {
+                src_block = false;                  
+                src_idx += 1;
+                result.push("\\end{minted}".to_string());
+            } else {    // keep the rest of the code identical
+                result.push(line);
+            }
+        }
+
+        result
     }
 
     fn output_file_name(&self, target: &String) -> String {
