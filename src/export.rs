@@ -24,7 +24,7 @@ pub struct Exporter {
 impl Exporter {
     pub fn from_file(filename: &String) -> Result<Self, ErrorKind> {
         let lines        = read_file(filename)?;
-        let (src, langs) = Exporter::parse_src(&lines)?;
+        let (src, langs) = Exporter::extract_src(&lines)?;
         Ok(Exporter {
             input_path:     filename.to_owned(),
             content_lines:  lines,
@@ -55,7 +55,7 @@ impl Exporter {
         Ok(())
     }
 
-    fn parse_src(lines: &Vec<String>) -> Result<(Vec<SrcBlock>, Vec<(String, String)>), ErrorKind> {
+    fn extract_src(lines: &Vec<String>) -> Result<(Vec<SrcBlock>, Vec<(String, String)>), ErrorKind> {
         let mut lang_name   = None;
         let mut block_name  = None;
         let mut block_lines = Vec::new();
@@ -68,16 +68,9 @@ impl Exporter {
             let line = full_line.replace("\n", "");
 
             if line.starts_with("#+BEGIN_SRC") {
-                let mut parts: Vec<String> = line.split(" ")
-                                            .map(|n| n.to_string())
-                                            .collect();
-                if parts.len() < 2 {
-                    parts = vec![String::new(), "none".to_string()];
-                }
-                lang_name = Some(parts[1].clone());
+                lang_name = Some(Exporter::parse_begin_src(&line));
                 src = true;
             } else if line.starts_with("#+END_SRC") {
-                src = false;
                 src_blocks.push(SrcBlock {
                     name:  block_name.unwrap_or("none".to_string()),
                     lang:  lang_name.unwrap_or("none".to_string()).to_string(),
@@ -88,66 +81,93 @@ impl Exporter {
                 block_deps.clear();
                 block_name = None;
                 lang_name  = None;
+                src = false;
             } else if line.starts_with("#+NAME:") {
-                let mut trimmed = line.replace("#+NAME:", "");
-                trimmed = trimmed.trim().to_string();
-                block_name = Some(trimmed);
+                block_name = Some(Exporter::parse_name(&line));
             } else if line.starts_with("#+DEPS:") {
-                let mut trimmed = line.replace("#+DEPS:", "");
-                trimmed = trimmed.trim().to_string();
-                
-                block_deps = trimmed.split(" ")
-                    .filter(|n| n.len() > 0)
-                    .map(|n| n.to_string())
-                    .collect();
+                block_deps = Exporter::parse_deps(&line);
             } else if line.starts_with("#+SRC_LANG:") {
-                let mut trimmed = line.replace("#+SRC_LANG:", "");
-                trimmed = trimmed.trim().to_string();
-
-                let lang: String = trimmed.split(" ")
-                    .nth(0)
-                    .unwrap_or("fail")
-                    .to_string();
-                let suffix: String = trimmed.split(" ")
-                    .filter(|n| n.len() > 0)
-                    .nth(1)
-                    .unwrap_or("fail")
-                    .to_string();
-                langs.push( (lang, suffix) );
+                langs.push(Exporter::parse_src_lang(&line));
             } else if line.starts_with("#+INCLUDE:") {
-                let args = line.split(" ")
-                            .filter(|n| n.len() > 0)
-                            .map(|n| n.to_string())
-                            .collect::<Vec<String>>();
-                let len = args.len();
-                
-                if len == 2 { // no optional arguments => .org file
-                    let included_filename = &args[1];
-                    let exporter = Exporter::from_file(included_filename)?;
-                    let mut new_src_blocks = exporter.src_blocks().clone();
-                    let mut new_langs      = exporter.langs().clone();
-                    src_blocks.append(&mut new_src_blocks);
-                    langs.append(&mut new_langs);
-                } else if len == 4 &&
-                          &args[2] == "src" { // src import
-                    let included_filename = &args[1];
-                    let lang  = args[3].clone();
-                    let lines = read_file(included_filename)?;
-
-                    src_blocks.push(SrcBlock {
-                        name:  String::new(),
-                        lang:  lang,
-                        lines: lines,
-                        dependencies: Vec::new(),
-                    });
-                }
-                // other variants if includes are assumed to contain no src code
+                Exporter::parse_include(&line, &mut src_blocks, &mut langs)?;
             } else if src {
                 block_lines.push(line.to_owned());
             }
         }
-
         Ok((src_blocks, langs))
+    }
+
+    fn parse_begin_src(line: &String) -> String {
+        let lang_str: String = line.split(" ")
+                                    // skip the "#+BEGIN_SRC" phrase
+                                    .skip(1)
+                                    // discard empty strings which occur if
+                                    // multiple spaces are inbetween args
+                                    .filter(|n| n.len() > 0)
+                                    // flags like -i and -n not relevant here
+                                    .filter(|n| !(n.starts_with("-") &&
+                                                  n.len() == 2))
+                                    .nth(0)
+                                    .unwrap_or("none").to_string();
+        lang_str
+    }
+
+    fn parse_name(line: &String) -> String {
+        let trimmed = line.replace("#+NAME:", "");
+        trimmed.trim().to_string()
+    }
+
+    fn parse_deps(line: &String) -> Vec<String> {
+        let mut trimmed = line.replace("#+DEPS:", "");
+        trimmed = trimmed.trim().to_string();
+                
+        trimmed.split(" ")
+                .filter(|n| n.len() > 0)
+                .map(|n| n.to_string())
+                .collect()
+    }
+
+    fn parse_src_lang(line: &String) -> (String, String) {
+        let mut trimmed = line.replace("#+SRC_LANG:", "");
+        trimmed = trimmed.trim().to_string();
+
+        let mut args = trimmed.split(" ")
+                        .filter(|n| n.len() > 0);
+        let lang:   String = args.nth(0).unwrap_or("fail").to_string();
+        let suffix: String = args.nth(1).unwrap_or("fail").to_string();
+        (lang, suffix)
+    }
+
+    fn parse_include(line: &String, src_blocks: &mut Vec<SrcBlock>,
+                langs: &mut Vec<(String, String)>) -> Result<(), ErrorKind> {
+        let args = line.split(" ")
+                    .filter(|n| n.len() > 0)
+                    .map(|n| n.to_string())
+                    .collect::<Vec<String>>();
+        let len = args.len();
+        
+        if len == 2 { // no optional arguments => .org file
+            let included_filename = &args[1];
+            let exporter = Exporter::from_file(included_filename)?;
+            let mut new_src_blocks = exporter.src_blocks().clone();
+            let mut new_langs      = exporter.langs().clone();
+            src_blocks.append(&mut new_src_blocks);
+            langs.append(&mut new_langs);
+        } else if len == 4 &&
+                  &args[2] == "src" { // src import
+            let included_filename = &args[1];
+            let lang  = args[3].clone();
+            let lines = read_file(included_filename)?;
+
+            src_blocks.push(SrcBlock {
+                name:  String::new(),
+                lang:  lang,
+                lines: lines,
+                dependencies: Vec::new(),
+            });
+        }
+        // other variants if includes are assumed to contain no src code
+        Ok(())
     }
 
     /// PDF/LaTeX
