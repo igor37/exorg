@@ -17,19 +17,28 @@ pub struct Exporter {
     input_path:     String,
     content_lines:  Vec<String>,
     src_blocks:     Vec<SrcBlock>,
+    // langs: (<language name>, <file prefix>)
     langs:          Vec<(String, String)>,
 }
 
 impl Exporter {
     pub fn from_file(filename: &String) -> Result<Self, ErrorKind> {
         let lines        = read_file(filename)?;
-        let (src, langs) = Exporter::parse_src(&lines);
+        let (src, langs) = Exporter::parse_src(&lines)?;
         Ok(Exporter {
             input_path:     filename.to_owned(),
             content_lines:  lines,
             src_blocks:     src,
             langs:          langs,
         })
+    }
+
+    fn src_blocks(&self) -> &Vec<SrcBlock> {
+        &self.src_blocks
+    }
+
+    fn langs(&self) -> &Vec<(String, String)> {
+        &self.langs
     }
 
     pub fn export(&self, format: &String, block: &Option<String>) -> Result<(), ErrorKind> {
@@ -46,7 +55,7 @@ impl Exporter {
         Ok(())
     }
 
-    fn parse_src(lines: &Vec<String>) -> (Vec<SrcBlock>, Vec<(String, String)>) {
+    fn parse_src(lines: &Vec<String>) -> Result<(Vec<SrcBlock>, Vec<(String, String)>), ErrorKind> {
         let mut lang_name   = None;
         let mut block_name  = None;
         let mut block_lines = Vec::new();
@@ -105,12 +114,40 @@ impl Exporter {
                     .unwrap_or("fail")
                     .to_string();
                 langs.push( (lang, suffix) );
+            } else if line.starts_with("#+INCLUDE:") {
+                let args = line.split(" ")
+                            .filter(|n| n.len() > 0)
+                            .map(|n| n.to_string())
+                            .collect::<Vec<String>>();
+                let len = args.len();
+                
+                if len == 2 { // no optional arguments => .org file
+                    let included_filename = &args[1];
+                    let exporter = Exporter::from_file(included_filename)?;
+                    let mut new_src_blocks = exporter.src_blocks().clone();
+                    let mut new_langs      = exporter.langs().clone();
+                    src_blocks.append(&mut new_src_blocks);
+                    langs.append(&mut new_langs);
+                } else if len == 4 &&
+                          &args[2] == "src" { // src import
+                    let included_filename = &args[1];
+                    let lang  = args[3].clone();
+                    let lines = read_file(included_filename)?;
+
+                    src_blocks.push(SrcBlock {
+                        name:  String::new(),
+                        lang:  lang,
+                        lines: lines,
+                        dependencies: Vec::new(),
+                    });
+                }
+                // other variants if includes are assumed to contain no src code
             } else if src {
                 block_lines.push(line.to_owned());
             }
         }
 
-        (src_blocks, langs)
+        Ok((src_blocks, langs))
     }
 
     /// PDF/LaTeX
@@ -143,7 +180,16 @@ impl Exporter {
                         .arg(&tex_file_path)
                         .output() {
                 Err(_) => return Err(ErrorKind::PdfLatexCallFailed),
-                Ok(_)  => {},
+                Ok(m)  => {
+                    // if no PDF was produced due to a fatal error, print the
+                    // error message
+                    let out = format!("{}", m.stdout.iter()
+                                                        .map(|n| *n as char)
+                                                        .collect::<String>());
+                    if out.contains("no output PDF file produced") {
+                        println!("ERROR occurred. Log:\n{}", out);
+                    }
+                },
             }
         }
         // println!("{:?}", result);
@@ -222,16 +268,17 @@ impl Exporter {
                 pkg = true;
             }
             // replace all verbatim src blocks
-            if line.contains("begin") && line.contains("{verbatim}") &&
-                                lines[i+1].trim().contains(
-                                    self.src_blocks[src_idx].lines[0].trim()) {
-                src_block = true;
+            if src_idx < self.src_blocks.len() &&
+                    line.contains("begin") && line.contains("{verbatim}") &&
+                    lines[i+1].trim().contains(self.src_blocks[src_idx].lines[0].trim()) {
+
                 result.push(format!("\\begin{{minted}}{{{}}}",
                                     self.src_blocks[src_idx].lang));
+                src_block = true;
+                src_idx += 1;
             } else if line.contains("end") && line.contains("{verbatim}") &&
                                                                     src_block {
                 src_block = false;                  
-                src_idx += 1;
                 result.push("\\end{minted}".to_string());
             } else {    // keep the rest of the code identical
                 result.push(line);
