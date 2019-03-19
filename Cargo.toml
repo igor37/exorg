@@ -1,5 +1,5 @@
 [package]
-name = "borg"
+name = "exorg"
 version = "0.1.0"
 authors = ["Igor Harden <i.harden@gmx.at>"]
 

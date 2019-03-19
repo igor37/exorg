@@ -41,7 +41,8 @@ impl Exporter {
         &self.langs
     }
 
-    pub fn export(&self, format: &String, block: &Option<String>) -> Result<(), ErrorKind> {
+    pub fn export(&self, format: &String, block: &Option<String>,
+                                out: &Option<String>) -> Result<(), ErrorKind> {
         let lower = format.to_lowercase();
         if lower.starts_with("pdf") {
             match lower.as_str() {
@@ -50,7 +51,7 @@ impl Exporter {
                 _ => return Err(ErrorKind::InvalidOutputFormat),
             }
         } else {
-            self.tangle(&lower, block)?;
+            self.tangle(&lower, block, out)?;
         }
         Ok(())
     }
@@ -68,12 +69,12 @@ impl Exporter {
             let line = full_line.replace("\n", "");
 
             if line.starts_with("#+BEGIN_SRC") {
-                lang_name = Some(Exporter::parse_begin_src(&line));
+                lang_name = Exporter::parse_begin_src(&line);
                 src = true;
             } else if line.starts_with("#+END_SRC") {
                 src_blocks.push(SrcBlock {
-                    name:  block_name.unwrap_or("none".to_string()),
-                    lang:  lang_name.unwrap_or("none".to_string()).to_string(),
+                    name:  block_name.unwrap_or("".to_string()),
+                    lang:  lang_name.unwrap_or("".to_string()).to_string(),
                     lines: block_lines.clone(),
                     dependencies: block_deps.clone(),
                 });
@@ -89,7 +90,10 @@ impl Exporter {
             } else if line.starts_with("#+SRC_LANG:") {
                 langs.push(Exporter::parse_src_lang(&line));
             } else if line.starts_with("#+INCLUDE:") {
-                Exporter::parse_include(&line, &mut src_blocks, &mut langs)?;
+                Exporter::parse_include(&line, &mut src_blocks,
+                                        &mut langs, block_name, block_deps)?;
+                block_name = None;
+                block_deps = Vec::new();
             } else if src {
                 block_lines.push(line.to_owned());
             }
@@ -97,8 +101,8 @@ impl Exporter {
         Ok((src_blocks, langs))
     }
 
-    fn parse_begin_src(line: &String) -> String {
-        let lang_str: String = line.split(" ")
+    fn parse_begin_src(line: &String) -> Option<String> {
+        let lang_str: Option<String> = line.split(" ")
                                     // skip the "#+BEGIN_SRC" phrase
                                     .skip(1)
                                     // discard empty strings which occur if
@@ -108,7 +112,7 @@ impl Exporter {
                                     .filter(|n| !(n.starts_with("-") &&
                                                   n.len() == 2))
                                     .nth(0)
-                                    .unwrap_or("none").to_string();
+                                    .map(|s| s.to_string());
         lang_str
     }
 
@@ -139,7 +143,9 @@ impl Exporter {
     }
 
     fn parse_include(line: &String, src_blocks: &mut Vec<SrcBlock>,
-                langs: &mut Vec<(String, String)>) -> Result<(), ErrorKind> {
+                     langs: &mut Vec<(String, String)>,
+                     block_name: Option<String>, block_deps: Vec<String>) 
+                                                    -> Result<(), ErrorKind> {
         let args = line.split(" ")
                     .filter(|n| n.len() > 0)
                     .map(|n| n.to_string())
@@ -158,12 +164,16 @@ impl Exporter {
             let included_filename = &args[1];
             let lang  = args[3].clone();
             let lines = read_file(included_filename)?;
+            let name  = match block_name {
+                Some(n) => n,
+                None    => String::new(),
+            };
 
             src_blocks.push(SrcBlock {
-                name:  String::new(),
+                name:  name,
                 lang:  lang,
                 lines: lines,
-                dependencies: Vec::new(),
+                dependencies: block_deps,
             });
         }
         // other variants if includes are assumed to contain no src code
@@ -221,7 +231,8 @@ impl Exporter {
     }
 
     /// Code extraction
-    fn tangle(&self, target: &String, selected: &Option<String>) -> Result<(), ErrorKind> {
+    fn tangle(&self, target: &String, selected: &Option<String>,
+                                out: &Option<String>) -> Result<(), ErrorKind> {
         let mut src_lines = Vec::new();
 
         // collect relevant source code snippets
@@ -269,7 +280,10 @@ impl Exporter {
             src_lines.pop();
         }
 
-        let output_name = self.output_file_name(target);
+        let output_name = match out {
+            Some(s) => s.to_string(),
+            None    => self.output_file_name(target),
+        };
         write_file(&output_name, &src_lines)?;
         Ok(())
     }
@@ -313,6 +327,7 @@ impl Exporter {
         let prefix     = input_file.split('.').nth(0).unwrap();
 
         match target.as_str() {
+            ""                        => format!("{}", prefix),
             "awk"                     => format!("{}.awk", prefix),
             "bash" | "sh" | "shell"   => format!("{}.sh", prefix),
             "c"                       => format!("{}.c", prefix),
