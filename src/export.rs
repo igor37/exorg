@@ -44,11 +44,11 @@ impl Exporter {
     pub fn export(&self, format: &String, block: &Option<String>,
                                 out: &Option<String>) -> Result<(), ErrorKind> {
         let lower = format.to_lowercase();
-        if lower.starts_with("pdf") {
+        if lower == "pdf" || lower == "pdf-minted" {
             match lower.as_str() {
                 "pdf"        => self.weave(false)?,
                 "pdf-minted" => self.weave(true)?,
-                _ => return Err(ErrorKind::InvalidOutputFormat),
+                _ => unreachable!(),
             }
         } else {
             self.tangle(&lower, block, out)?;

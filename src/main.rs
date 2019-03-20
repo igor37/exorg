@@ -18,11 +18,17 @@ fn main() {
 
 
     let exporter = match Exporter::from_file(&in_filename) {
-        Err(e) => panic!("Error: {:?}", e),
+        Err(e) => {
+            println!("Error: {}", e);
+            return;
+        },
         Ok(ex) => ex,
     };
     match exporter.export(&format, &block, &out_filename) {
-        Err(e) => panic!("Error: {:?}", e),
+        Err(e) => {
+            println!("Error: {}", e);
+            return;
+        },
         _      => {},
     }
 }

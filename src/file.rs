@@ -48,13 +48,13 @@ pub fn write_file(path: &String, lines: &Vec<String>) -> Result<(), ErrorKind> {
     for n in 0..lines.len() {
         match write!(writer, "{}\n", lines[n]) {
             Err(_)  => return Err(ErrorKind::FileError {
-                            msg: format!("Error while writing to {}", path) }),
+                            msg: format!("writing to {} failed", path) }),
             Ok(_)   => {},
         }
     }
     match writer.flush() {
         Err(_)  => return Err(ErrorKind::FileError{
-                            msg: format!("Error while writing to {}", path) }),
+                            msg: format!("writing to {} failed", path) }),
         Ok(_)   => {},
     }
     Ok(())
