@@ -182,52 +182,45 @@ impl Exporter {
 
     /// PDF/LaTeX
     fn weave(&self, minted: bool) -> Result<(), ErrorKind> {
-        let tex_cmd = "(org-latex-export-to-latex)";
-        let pdf_cmd = "(org-latex-export-to-pdf)";
-        let full_cmd = if minted {
-            format!("(progn (setq org-confirm-babel-evaluate nil) {} (kill-emacs))", tex_cmd)
-        } else {
-            format!("(progn (setq org-confirm-babel-evaluate nil) {} (kill-emacs))", pdf_cmd)
-        };
+        let full_cmd = "(progn (setq org-confirm-babel-evaluate nil) (org-latex-export-to-latex) (kill-emacs))";
 
-        let result = Command::new("emacs")
-            .arg(&self.input_path)
-            .arg("--batch")
-            .arg("--eval")
-            .arg(full_cmd)
-            .output();
+        match Command::new("emacs")
+                    .arg(&self.input_path)
+                    .arg("--batch")
+                    .arg("--eval")
+                    .arg(full_cmd)
+                    .output() {
+            Err(_) => return Err(ErrorKind::EmacsCallFailed),
+            Ok(_)  => {},
+        }
 
+        let tex_file_path = self.output_file_name(&"latex".to_string());
         // open .tex file and substitute verbatim blocks with minted src blocks,
         // then compile to pdf
         if minted {
-            let tex_file_path = self.output_file_name(&"latex".to_string());
-            let lines         = self.mint_tex( &read_file(&tex_file_path)? );
+            let lines = self.mint_tex( &read_file(&tex_file_path)? );
             write_file( &tex_file_path,
                         &lines )?;
-
-            match Command::new("pdflatex")
-                        .arg("-shell-escape")
-                        .arg(&tex_file_path)
-                        .output() {
-                Err(_) => return Err(ErrorKind::PdfLatexCallFailed),
-                Ok(m)  => {
-                    // if no PDF was produced due to a fatal error, print the
-                    // error message
-                    let out = format!("{}", m.stdout.iter()
-                                                        .map(|n| *n as char)
-                                                        .collect::<String>());
-                    if out.contains("no output PDF file produced") {
-                        println!("ERROR occurred. Log:\n{}", out);
-                    }
-                },
-            }
         }
-        // println!("{:?}", result);
 
-        match result {
-            Err(_) => Err(ErrorKind::EmacsCallFailed),
-            Ok(_)  => Ok(()),
+        match Command::new("pdflatex")
+                    .arg("-shell-escape")
+                    // .arg(&out_dir_arg)
+                    .arg(&tex_file_path)
+                    .output() {
+            Err(_) => return Err(ErrorKind::PdfLatexCallFailed),
+            Ok(m)  => {
+                // if no PDF was produced due to a fatal error, print the
+                // error message
+                let out = format!("{}", m.stdout.iter()
+                                                    .map(|n| *n as char)
+                                                    .collect::<String>());
+                if out.contains("no output PDF file produced") {
+                    println!("ERROR occurred. Log:\n{}", out);
+                }
+            },
         }
+        Ok(())
     }
 
     /// Code extraction
@@ -246,15 +239,15 @@ impl Exporter {
         match selected {
             Some(name) => {
                 let mut added = true;
-                let mut relevant_blocks = vec![name.to_owned()];
+                let mut relevant_block_names = vec![name.to_owned()];
 
                 while added {
                     added = false;
                     for block in &self.src_blocks {
-                        if relevant_blocks.contains(&block.name) {
+                        if relevant_block_names.contains(&block.name) {
                             for dep in &block.dependencies {
-                                if !relevant_blocks.contains(&dep) {
-                                    relevant_blocks.push(dep.to_string());
+                                if !relevant_block_names.contains(&dep) {
+                                    relevant_block_names.push(dep.to_string());
                                     added = true;
                                 }
                             }
@@ -262,10 +255,46 @@ impl Exporter {
                     }
                 }
 
-                target_blocks = target_blocks.iter()
-                                .filter(|b| relevant_blocks.contains(&b.name))
-                                .map(|b| b.clone())
-                                .collect();
+                // collect all src blocks, ordering them with respect to their
+                // dependencies.
+                let mut new_insertion;
+                let mut blocks = target_blocks.clone();
+                target_blocks.clear();
+                let mut inserted_block_names = Vec::new();
+                loop {
+                    new_insertion = false;
+                    for block in &blocks {
+                        if inserted_block_names.contains(&block.name) ||
+                          !relevant_block_names.contains(&block.name) {
+                            continue;
+                        }
+
+                        let mut dependencies_met = true;
+                        for dependency in &block.dependencies {
+                            if !inserted_block_names.contains(&dependency) {
+                                dependencies_met = false;
+                                break;
+                            }
+                        }
+
+                        if dependencies_met {
+                            inserted_block_names.push(block.name.clone());
+                            target_blocks.push(block.clone());
+                            new_insertion = true;
+                        }
+                    }
+
+                    if inserted_block_names.len() >= relevant_block_names.len() {
+                        break;
+                    }
+                    if !new_insertion {
+                        return Err(ErrorKind::UnsatisfiableDependencies);
+                    }
+                }
+
+                if target_blocks.len() == 0 {
+                    return Err(ErrorKind::CodeBlockNotFound);
+                }
             },
             None => {},
         }
@@ -277,7 +306,7 @@ impl Exporter {
                 src_lines.append(&mut block.lines.clone());
                 src_lines.push(String::new());
             }
-            src_lines.pop();
+            src_lines.pop(); // last line is always empty
         }
 
         let output_name = match out {

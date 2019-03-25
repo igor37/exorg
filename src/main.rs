@@ -93,8 +93,6 @@ arguments:
     <output file>   name of the exported src file. Default is name of .org input
                     file with the suffix replaced. This argument disables
                     automatic file suffix.
-
-    --help          print this message and exit
     "#; 
     println!("{}", msg);
 }
