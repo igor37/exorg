@@ -235,11 +235,41 @@ impl Exporter {
                                                          target  == "jupyter"))
                                                 .map(|b| b.clone())
                                                 .collect();
-
+        
         match selected {
             Some(name) => {
+                let mut selected_name = name.to_string();
+                // look for the selected block and figure out if the user
+                // provided the incomplete name of the selected block, expecting
+                // autocompletion.
+                //
+                // remember all blocks which have the given name as prefix
+                let mut prefixes = Vec::new();
+                let mut matches  = Vec::new();
+                for bi in 0..self.src_blocks.len() {
+                    if self.src_blocks[bi].name.starts_with(selected_name.as_str()) {
+                        prefixes.push(bi);
+                        if &self.src_blocks[bi].name == &selected_name {
+                            matches.push(bi);
+                        }
+                    }
+                }
+                // if the number of exact matches exceeds 1 we don't know which
+                // block to select
+                if matches.len() > 1 {
+                    return Err(ErrorKind::AmbiguousCodeBlockName);
+                } else if matches.len() == 0 { // no exact match -> autocomplete
+                    if prefixes.len() > 1 {
+                        return Err(ErrorKind::AmbiguousCodeBlockName);
+                    } else if prefixes.len() == 0 {
+                        return Err(ErrorKind::CodeBlockNotFound);
+                    } else {
+                        selected_name = self.src_blocks[prefixes[0]].name.to_owned();
+                    }
+                } // else name already is the correct, full name
+
                 let mut added = true;
-                let mut relevant_block_names = vec![name.to_owned()];
+                let mut relevant_block_names = vec![selected_name.to_owned()];
 
                 while added {
                     added = false;
@@ -290,10 +320,6 @@ impl Exporter {
                     if !new_insertion {
                         return Err(ErrorKind::UnsatisfiableDependencies);
                     }
-                }
-
-                if target_blocks.len() == 0 {
-                    return Err(ErrorKind::CodeBlockNotFound);
                 }
             },
             None => {},

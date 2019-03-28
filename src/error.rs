@@ -7,6 +7,7 @@ pub enum ErrorKind {
     EmacsCallFailed,
     PdfLatexCallFailed,
     CodeBlockNotFound,
+    AmbiguousCodeBlockName,
     UnsatisfiableDependencies,
 }
 
@@ -17,6 +18,7 @@ impl fmt::Display for ErrorKind {
             ErrorKind::EmacsCallFailed           => write!(f, "calling Emacs failed"),
             ErrorKind::PdfLatexCallFailed        => write!(f, "calling pdflatex failed"),
             ErrorKind::CodeBlockNotFound         => write!(f, "specified code block not found"),
+            ErrorKind::AmbiguousCodeBlockName    => write!(f, "muliple code blocks match given name"),
             ErrorKind::UnsatisfiableDependencies => write!(f, "dependencies can't be satisfied"),
         }
     }
