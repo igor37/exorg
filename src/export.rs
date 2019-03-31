@@ -356,10 +356,11 @@ impl Exporter {
                 result.push("\\usepackage{minted}".to_string());
                 pkg = true;
             }
-            // replace all verbatim src blocks
+            // replace all verbatim src blocks with a specified language
             if src_idx < self.src_blocks.len() &&
                     line.contains("begin") && line.contains("{verbatim}") &&
-                    lines[i+1].trim().contains(self.src_blocks[src_idx].lines[0].trim()) {
+                    lines[i+1].trim().contains(self.src_blocks[src_idx].lines[0].trim()) &&
+                    self.src_blocks[src_idx].lang != "" {
 
                 result.push(format!("\\begin{{minted}}{{{}}}",
                                     self.src_blocks[src_idx].lang));
