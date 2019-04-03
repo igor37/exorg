@@ -10,6 +10,27 @@ struct SrcBlock {
     pub lang:  String,
     pub lines: Vec<String>,
     pub dependencies: Vec<String>,
+    pub filename: Option<String>,
+}
+
+#[derive(Clone)]
+struct FileContent {
+    pub name:  String,
+    pub lines: Vec<String>,
+}
+
+impl FileContent {
+    fn new(name: &String) -> Self {
+        FileContent {
+            name: name.clone(),
+            lines: Vec::new()
+        }
+    }
+
+    fn write_content(&self) -> Result<(), ErrorKind> {
+        write_file(&self.name, &self.lines)?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -42,16 +63,17 @@ impl Exporter {
     }
 
     pub fn export(&self, format: &String, block: &Option<String>,
-                                out: &Option<String>) -> Result<(), ErrorKind> {
-        let lower = format.to_lowercase();
-        if lower == "pdf" || lower == "pdf-minted" {
-            match lower.as_str() {
+                        out_filename: &Option<String>) -> Result<(), ErrorKind> {
+
+        let lower_format = format.to_lowercase();
+        if lower_format == "pdf" || lower_format == "pdf-minted" {
+            match lower_format.as_str() {
                 "pdf"        => self.weave(false)?,
                 "pdf-minted" => self.weave(true)?,
                 _ => unreachable!(),
             }
         } else {
-            self.tangle(&lower, block, out)?;
+            self.tangle(&lower_format, block, out_filename)?;
         }
         Ok(())
     }
@@ -59,6 +81,7 @@ impl Exporter {
     fn extract_src(lines: &Vec<String>) -> Result<(Vec<SrcBlock>, Vec<(String, String)>), ErrorKind> {
         let mut lang_name   = None;
         let mut block_name  = None;
+        let mut block_file  = None;
         let mut block_lines = Vec::new();
         let mut block_deps  = Vec::new();
         let mut langs       = Vec::new();
@@ -77,22 +100,27 @@ impl Exporter {
                     lang:  lang_name.unwrap_or("".to_string()).to_string(),
                     lines: block_lines.clone(),
                     dependencies: block_deps.clone(),
+                    filename: block_file.clone(),
                 });
                 block_lines.clear();
                 block_deps.clear();
                 block_name = None;
+                block_file = None;
                 lang_name  = None;
                 src = false;
             } else if line.starts_with("#+NAME:") {
                 block_name = Some(Exporter::parse_name(&line));
             } else if line.starts_with("#+DEPS:") {
                 block_deps = Exporter::parse_deps(&line);
+            } else if line.starts_with("#+FILE:") {
+                block_file = Some(Exporter::parse_filename(&line));
             } else if line.starts_with("#+SRC_LANG:") {
                 langs.push(Exporter::parse_src_lang(&line));
             } else if line.starts_with("#+INCLUDE:") {
                 Exporter::parse_include(&line, &mut src_blocks,
-                                        &mut langs, block_name, block_deps)?;
+                                        &mut langs, block_name, block_deps, block_file)?;
                 block_name = None;
+                block_file = None;
                 block_deps = Vec::new();
             } else if src {
                 block_lines.push(line.to_owned());
@@ -131,6 +159,11 @@ impl Exporter {
                 .collect()
     }
 
+    fn parse_filename(line: &String) -> String {
+        let trimmed = line.replace("#+FILE:", "");
+        trimmed.trim().to_string()
+    }
+
     fn parse_src_lang(line: &String) -> (String, String) {
         let mut trimmed = line.replace("#+SRC_LANG:", "");
         trimmed = trimmed.trim().to_string();
@@ -144,8 +177,8 @@ impl Exporter {
 
     fn parse_include(line: &String, src_blocks: &mut Vec<SrcBlock>,
                      langs: &mut Vec<(String, String)>,
-                     block_name: Option<String>, block_deps: Vec<String>) 
-                                                    -> Result<(), ErrorKind> {
+                     block_name: Option<String>, block_deps: Vec<String>,
+                     block_file: Option<String>) -> Result<(), ErrorKind> {
         let args = line.split(" ")
                     .filter(|n| n.len() > 0)
                     .map(|n| n.to_string())
@@ -174,6 +207,7 @@ impl Exporter {
                 lang:  lang,
                 lines: lines,
                 dependencies: block_deps,
+                filename: block_file,
             });
         }
         // other variants if includes are assumed to contain no src code
@@ -225,16 +259,29 @@ impl Exporter {
 
     /// Code extraction
     fn tangle(&self, target: &String, selected: &Option<String>,
-                                out: &Option<String>) -> Result<(), ErrorKind> {
-        let mut src_lines = Vec::new();
+                        out_filename: &Option<String>) -> Result<(), ErrorKind> {
+        let generic_out_name = match out_filename {
+            Some(s) => s.to_string(),
+            None    => self.output_file_name(target),
+        };
+
+        let mut files = Vec::new();
+        let fallback_file = FileContent::new(&generic_out_name);
+        files.push(fallback_file);
 
         // collect relevant source code snippets
-        let mut target_blocks: Vec<SrcBlock> = self.src_blocks.iter()
-                                                .filter(|b| &b.lang == target ||
-                                                        (&b.lang == "python" &&
-                                                         target  == "jupyter"))
-                                                .map(|b| b.clone())
-                                                .collect();
+        //
+        // check for "." export mode as this means skipping language comparisons
+        let mut target_blocks: Vec<SrcBlock> = if target == "." {
+            self.src_blocks.clone()
+        } else {
+            self.src_blocks.iter()
+                .filter(|b| &b.lang == target ||
+                        (&b.lang == "python" &&
+                         target  == "jupyter"))
+                .map(|b| b.clone())
+                .collect()
+        };
         
         match selected {
             Some(name) => {
@@ -326,20 +373,55 @@ impl Exporter {
         }
 
         if target == "jupyter" {
-            src_lines = Exporter::build_jupyter_notebook(&target_blocks);
+            files.push(FileContent {
+                name:  generic_out_name,
+                lines: Exporter::build_jupyter_notebook(&target_blocks)
+            });
         } else {
-            for block in target_blocks {
-                src_lines.append(&mut block.lines.clone());
-                src_lines.push(String::new());
+            if target == "." {
+                // copy lines of each src block into corresponding FileContent
+                // instances, creating them on the go if necessary
+                for block in target_blocks {
+                    let mut opt = None;
+                    // look if there's already a FileContent instance for this path
+                    match &block.filename {
+                        Some(f) => {
+                            for fi in 0..files.len() {
+                                if &files[fi].name == f {
+                                    opt = Some(fi);
+                                    break;
+                                }
+                            }
+                        },
+                        None    => {
+                            opt = Some(0);
+                        }
+                    }
+                    // get the index of the FileContent instance, one way or another
+                    let idx = match opt {
+                        None => {
+                            // unwrap() should be perfectly fine here as the
+                            // "None" case is handled right above
+                            files.push(FileContent::new(&block.filename.unwrap()));
+                            files.len()-1
+                        },
+                        Some(i) => i,
+                    };
+
+                    files[idx].lines.append(&mut block.lines.clone());
+                    files[idx].lines.push(String::new());
+                }
+            } else { // just export into a single file
+                for block in target_blocks {
+                    files[0].lines.append(&mut block.lines.clone());
+                    files[0].lines.push(String::new());
+                }
             }
-            src_lines.pop(); // last line is always empty
         }
 
-        let output_name = match out {
-            Some(s) => s.to_string(),
-            None    => self.output_file_name(target),
-        };
-        write_file(&output_name, &src_lines)?;
+        for file in files {
+            file.write_content()?;
+        }
         Ok(())
     }
 
@@ -358,21 +440,21 @@ impl Exporter {
             }
             // replace all verbatim src blocks with a specified language
             if src_idx < self.src_blocks.len() &&
-                    line.contains("begin") && line.contains("{verbatim}") &&
+                line.contains("begin") && line.contains("{verbatim}") &&
                     lines[i+1].trim().contains(self.src_blocks[src_idx].lines[0].trim()) &&
                     self.src_blocks[src_idx].lang != "" {
 
-                result.push(format!("\\begin{{minted}}{{{}}}",
-                                    self.src_blocks[src_idx].lang));
-                src_block = true;
-                src_idx += 1;
-            } else if line.contains("end") && line.contains("{verbatim}") &&
-                                                                    src_block {
-                src_block = false;                  
-                result.push("\\end{minted}".to_string());
-            } else {    // keep the rest of the code identical
-                result.push(line);
-            }
+                        result.push(format!("\\begin{{minted}}{{{}}}",
+                                            self.src_blocks[src_idx].lang));
+                        src_block = true;
+                        src_idx += 1;
+                    } else if line.contains("end") && line.contains("{verbatim}") &&
+                        src_block {
+                            src_block = false;                  
+                            result.push("\\end{minted}".to_string());
+                        } else {    // keep the rest of the code identical
+                            result.push(line);
+                        }
         }
 
         result
@@ -444,8 +526,8 @@ impl Exporter {
             let len = block.lines.len();
             for k in 0..len {
                 let escaped = block.lines[k].replace("\\", "\\\\")
-                                            .replace("\"", "\\\"")
-                                            .replace("\t", "    ");
+                    .replace("\"", "\\\"")
+                    .replace("\t", "    ");
                 let line = if k < len-1 {
                     format!("    \"{}\\n\",", escaped)
                 } else {
@@ -491,6 +573,6 @@ impl Exporter {
         clines.push("}".to_string());
 
         clines
-    }
-        
+}
+
 }

@@ -82,6 +82,8 @@ arguments:
                         - pdf           (requires installed emacs and pdflatex)
                         - pdf-minted    (much nicer-looking source code)
                         - jupyter
+                        - .             extract all src blocks with a '#+FILE:'
+                                        header parameter to the given paths.
                         - custom format, defined in .org file via
                                 '#+SRC_LANG: <language name> <file suffix>'
                            e.g. '#+SRC_LANG: rust rs'
