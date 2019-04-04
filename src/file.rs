@@ -6,7 +6,7 @@ use std::io::BufWriter;
 use std::io::prelude::*;
 use std::path::Path;
 
-/// Reads file and returns contents or error as Result
+/// Read file, remove newlines and tabs and return contents or error as Result
 pub fn read_file(path: &String) -> Result<Vec<String>, ErrorKind> {
     let file = match OpenOptions::new().read(true).open(path) {
         Err(_) => return Err(ErrorKind::FileError {

@@ -27,9 +27,14 @@ impl FileContent {
         }
     }
 
-    fn write_content(&self) -> Result<(), ErrorKind> {
-        write_file(&self.name, &self.lines)?;
-        Ok(())
+    /// Writes its lines into the file at the path stored in 'name' if 'lines'
+    /// is not empty
+    fn write_content(&self) -> Result<bool, ErrorKind> {
+        if self.lines.len() > 0 {
+            write_file(&self.name, &self.lines)?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 }
 
@@ -441,6 +446,7 @@ impl Exporter {
             // replace all verbatim src blocks with a specified language
             if src_idx < self.src_blocks.len() &&
                 line.contains("begin") && line.contains("{verbatim}") &&
+                    self.src_blocks[src_idx].lines.len() > 0 &&
                     lines[i+1].trim().contains(self.src_blocks[src_idx].lines[0].trim()) &&
                     self.src_blocks[src_idx].lang != "" {
 
