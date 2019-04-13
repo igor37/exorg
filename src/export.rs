@@ -4,6 +4,13 @@ use std::process::Command;
 use error::ErrorKind;
 use file::{read_file, write_file};
 
+#[derive(Copy, Clone, Debug)]
+enum PdfOpt {
+    Emacs,
+    EmacsMinted,
+    Pandoc,
+}
+
 #[derive(Clone, Debug)]
 struct SrcBlock {
     pub name:  String,
@@ -71,10 +78,11 @@ impl Exporter {
                         out_filename: &Option<String>) -> Result<(), ErrorKind> {
 
         let lower_format = format.to_lowercase();
-        if lower_format == "pdf" || lower_format == "pdf-minted" {
+        if lower_format == "pdf" || lower_format.starts_with("pdf-") {
             match lower_format.as_str() {
-                "pdf"        => self.weave(false)?,
-                "pdf-minted" => self.weave(true)?,
+                "pdf"        => self.weave(PdfOpt::Emacs)?,
+                "pdf-minted" => self.weave(PdfOpt::EmacsMinted)?,
+                "pdf-pandoc" => self.weave(PdfOpt::Pandoc)?,
                 _ => unreachable!(),
             }
         } else {
@@ -220,7 +228,29 @@ impl Exporter {
     }
 
     /// PDF/LaTeX
-    fn weave(&self, minted: bool) -> Result<(), ErrorKind> {
+    fn weave(&self, pdf_opt: PdfOpt) -> Result<(), ErrorKind> {
+        let tex_file_path = self.output_file_name(&"latex".to_string());
+
+        match pdf_opt {
+            PdfOpt::Emacs => {
+                self.call_emacs()?;
+                self.call_latex(&tex_file_path)?;
+            },
+            PdfOpt::EmacsMinted => {
+                self.call_emacs()?;
+                // open .tex file and substitute verbatim blocks with minted src blocks,
+                // then compile to pdf
+                let lines = self.mint_tex( &read_file(&tex_file_path)? );
+                write_file( &tex_file_path, &lines )?;
+                self.call_latex(&tex_file_path)?;
+            },
+            PdfOpt::Pandoc => self.call_pandoc()?,
+        }
+
+        Ok(())
+    }
+
+    fn call_emacs(&self) -> Result<(), ErrorKind> {
         let full_cmd = "(progn (setq org-confirm-babel-evaluate nil) (org-latex-export-to-latex) (kill-emacs))";
 
         match Command::new("emacs")
@@ -230,22 +260,39 @@ impl Exporter {
                     .arg(full_cmd)
                     .output() {
             Err(_) => return Err(ErrorKind::EmacsCallFailed),
-            Ok(_)  => {},
+            Ok(_)  => return Ok(()),
         }
+    }
 
-        let tex_file_path = self.output_file_name(&"latex".to_string());
-        // open .tex file and substitute verbatim blocks with minted src blocks,
-        // then compile to pdf
-        if minted {
-            let lines = self.mint_tex( &read_file(&tex_file_path)? );
-            write_file( &tex_file_path,
-                        &lines )?;
+    fn call_pandoc(&self) -> Result<(), ErrorKind> {
+        let path = if self.input_path.ends_with(".org") {
+            let mut p = self.input_path.clone();
+            let len = p.chars().count();
+            p.truncate(len - 4);
+            p
+        } else {
+            self.input_path.clone()
+        };
+        match Command::new("pandoc")
+                    .arg("-f")
+                    .arg("org")
+                    .arg("-t")
+                    .arg("latex")
+                    .arg(&self.input_path)
+                    .arg("-o")
+                    .arg(format!("{}.pdf", &path))
+                    .arg("--pdf-engine-opt=-shell-escape")
+                    .arg("--toc")
+                    .output() {
+            Err(_) => return Err(ErrorKind::PandocCallFailed),
+            Ok(_)  => return Ok(()),
         }
+    }
 
+    fn call_latex(&self, path: &String) -> Result<(), ErrorKind> {
         match Command::new("pdflatex")
                     .arg("-shell-escape")
-                    // .arg(&out_dir_arg)
-                    .arg(&tex_file_path)
+                    .arg(path)
                     .output() {
             Err(_) => return Err(ErrorKind::PdfLatexCallFailed),
             Ok(m)  => {
@@ -257,9 +304,9 @@ impl Exporter {
                 if out.contains("no output PDF file produced") {
                     println!("ERROR occurred. Log:\n{}", out);
                 }
+                return Ok(());
             },
         }
-        Ok(())
     }
 
     /// Code extraction
@@ -290,89 +337,7 @@ impl Exporter {
         
         match selected {
             Some(name) => {
-                let mut selected_name = name.to_string();
-                // look for the selected block and figure out if the user
-                // provided the incomplete name of the selected block, expecting
-                // autocompletion.
-                //
-                // remember all blocks which have the given name as prefix
-                let mut prefixes = Vec::new();
-                let mut matches  = Vec::new();
-                for bi in 0..self.src_blocks.len() {
-                    if self.src_blocks[bi].name.starts_with(selected_name.as_str()) {
-                        prefixes.push(bi);
-                        if &self.src_blocks[bi].name == &selected_name {
-                            matches.push(bi);
-                        }
-                    }
-                }
-                // if the number of exact matches exceeds 1 we don't know which
-                // block to select
-                if matches.len() > 1 {
-                    return Err(ErrorKind::AmbiguousCodeBlockName);
-                } else if matches.len() == 0 { // no exact match -> autocomplete
-                    if prefixes.len() > 1 {
-                        return Err(ErrorKind::AmbiguousCodeBlockName);
-                    } else if prefixes.len() == 0 {
-                        return Err(ErrorKind::CodeBlockNotFound);
-                    } else {
-                        selected_name = self.src_blocks[prefixes[0]].name.to_owned();
-                    }
-                } // else name already is the correct, full name
-
-                let mut added = true;
-                let mut relevant_block_names = vec![selected_name.to_owned()];
-
-                while added {
-                    added = false;
-                    for block in &self.src_blocks {
-                        if relevant_block_names.contains(&block.name) {
-                            for dep in &block.dependencies {
-                                if !relevant_block_names.contains(&dep) {
-                                    relevant_block_names.push(dep.to_string());
-                                    added = true;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // collect all src blocks, ordering them with respect to their
-                // dependencies.
-                let mut new_insertion;
-                let mut blocks = target_blocks.clone();
-                target_blocks.clear();
-                let mut inserted_block_names = Vec::new();
-                loop {
-                    new_insertion = false;
-                    for block in &blocks {
-                        if inserted_block_names.contains(&block.name) ||
-                          !relevant_block_names.contains(&block.name) {
-                            continue;
-                        }
-
-                        let mut dependencies_met = true;
-                        for dependency in &block.dependencies {
-                            if !inserted_block_names.contains(&dependency) {
-                                dependencies_met = false;
-                                break;
-                            }
-                        }
-
-                        if dependencies_met {
-                            inserted_block_names.push(block.name.clone());
-                            target_blocks.push(block.clone());
-                            new_insertion = true;
-                        }
-                    }
-
-                    if inserted_block_names.len() >= relevant_block_names.len() {
-                        break;
-                    }
-                    if !new_insertion {
-                        return Err(ErrorKind::UnsatisfiableDependencies);
-                    }
-                }
+                self.select_blocks(name, &mut target_blocks)?;
             },
             None => {},
         }
@@ -384,48 +349,143 @@ impl Exporter {
             });
         } else {
             if target == "." {
-                // copy lines of each src block into corresponding FileContent
-                // instances, creating them on the go if necessary
-                for block in target_blocks {
-                    let mut opt = None;
-                    // look if there's already a FileContent instance for this path
-                    match &block.filename {
-                        Some(f) => {
-                            for fi in 0..files.len() {
-                                if &files[fi].name == f {
-                                    opt = Some(fi);
-                                    break;
-                                }
-                            }
-                        },
-                        None    => {
-                            opt = Some(0);
-                        }
-                    }
-                    // get the index of the FileContent instance, one way or another
-                    let idx = match opt {
-                        None => {
-                            // unwrap() should be perfectly fine here as the
-                            // "None" case is handled right above
-                            files.push(FileContent::new(&block.filename.unwrap()));
-                            files.len()-1
-                        },
-                        Some(i) => i,
-                    };
-
-                    files[idx].lines.append(&mut block.lines.clone());
-                    files[idx].lines.push(String::new());
-                }
+                Exporter::cp_src_to_files(&mut target_blocks, &mut files);
             } else { // just export into a single file
                 for block in target_blocks {
-                    files[0].lines.append(&mut block.lines.clone());
-                    files[0].lines.push(String::new());
+                    if block.lines.len() > 0 {
+                        files[0].lines.append(&mut block.lines.clone());
+                        files[0].lines.push(String::new());
+                    }
                 }
             }
         }
 
         for file in files {
             file.write_content()?;
+        }
+        Ok(())
+    }
+
+    fn cp_src_to_files(target_blocks: &mut Vec<SrcBlock>, files: &mut Vec<FileContent>) {
+        // copy lines of each src block into corresponding FileContent
+        // instances, creating them on the go if necessary
+        for block in target_blocks {
+            let mut opt = None;
+            // look if there's already a FileContent instance for this path
+            match &block.filename {
+                Some(f) => {
+                    for fi in 0..files.len() {
+                        if &files[fi].name == f {
+                            opt = Some(fi);
+                            break;
+                        }
+                    }
+                },
+                None    => {
+                    opt = Some(0);
+                }
+            }
+            // get the index of the FileContent instance, one way or another
+            let idx = match opt {
+                None => {
+                    // unwrap() should be perfectly fine here as the
+                    // "None" case is handled right above
+                    files.push(FileContent::new(&block.clone().filename.unwrap()));
+                    files.len()-1
+                },
+                Some(i) => i,
+            };
+
+            files[idx].lines.append(&mut block.lines.clone());
+            files[idx].lines.push(String::new());
+        }
+    }
+
+    fn select_blocks(&self, name: &String,
+                    target_blocks: &mut Vec<SrcBlock>) -> Result<(), ErrorKind>{
+
+        let mut selected_name = name.to_string();
+        // look for the selected block and figure out if the user
+        // provided the incomplete name of the selected block, expecting
+        // autocompletion.
+        //
+        // remember all blocks which have the given name as prefix
+        let mut prefixes = Vec::new();
+        let mut matches  = Vec::new();
+        for bi in 0..self.src_blocks.len() {
+            if self.src_blocks[bi].name.starts_with(selected_name.as_str()) {
+                prefixes.push(bi);
+                if &self.src_blocks[bi].name == &selected_name {
+                    matches.push(bi);
+                }
+            }
+        }
+        // if the number of exact matches exceeds 1 we don't know which
+        // block to select
+        if matches.len() > 1 {
+            return Err(ErrorKind::AmbiguousCodeBlockName);
+        } else if matches.len() == 0 { // no exact match -> autocomplete
+            if prefixes.len() > 1 {
+                return Err(ErrorKind::AmbiguousCodeBlockName);
+            } else if prefixes.len() == 0 {
+                return Err(ErrorKind::CodeBlockNotFound);
+            } else {
+                selected_name = self.src_blocks[prefixes[0]].name.to_owned();
+            }
+        } // else name already is the correct, full name
+
+        let mut added = true;
+        let mut relevant_block_names = vec![selected_name.to_owned()];
+
+        while added {
+            added = false;
+            for block in &self.src_blocks {
+                if relevant_block_names.contains(&block.name) {
+                    for dep in &block.dependencies {
+                        if !relevant_block_names.contains(&dep) {
+                            relevant_block_names.push(dep.to_string());
+                            added = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // collect all src blocks, ordering them with respect to their
+        // dependencies.
+        let mut new_insertion;
+        let blocks = target_blocks.clone();
+        target_blocks.clear();
+        let mut inserted_block_names = Vec::new();
+        loop {
+            new_insertion = false;
+            for block in &blocks {
+                if inserted_block_names.contains(&block.name) ||
+                  !relevant_block_names.contains(&block.name) {
+                    continue;
+                }
+
+                let mut dependencies_met = true;
+                for dependency in &block.dependencies {
+                    if !inserted_block_names.contains(&dependency) {
+                        dependencies_met = false;
+                        break;
+                    }
+                }
+
+                if dependencies_met {
+                    inserted_block_names.push(block.name.clone());
+                    target_blocks.push(block.clone());
+                    new_insertion = true;
+                }
+            }
+
+            if inserted_block_names.len() >= relevant_block_names.len() {
+                break;
+            }
+            if !new_insertion {
+                return Err(ErrorKind::UnsatisfiableDependencies);
+            }
         }
         Ok(())
     }

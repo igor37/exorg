@@ -79,8 +79,10 @@ usage:  exorg <format> <file> [-b <block name>] [-o <output file>]
 arguments:
 
     <format>        output format, valid choices:
-                        - pdf           (requires installed emacs and pdflatex)
+                        - pdf           (using Emacs)
                         - pdf-minted    (much nicer-looking source code)
+                        - pdf-pandoc    (pdf conversion via pandoc with
+                                         --table-of-contents flag enabled)
                         - jupyter
                         - .             extract all src blocks with a '#+FILE:'
                                         header parameter to the given paths.

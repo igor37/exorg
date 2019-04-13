@@ -5,6 +5,7 @@ use std::fmt;
 pub enum ErrorKind {
     FileError{ msg: String },
     EmacsCallFailed,
+    PandocCallFailed,
     PdfLatexCallFailed,
     CodeBlockNotFound,
     AmbiguousCodeBlockName,
@@ -16,6 +17,7 @@ impl fmt::Display for ErrorKind {
         match self {
             ErrorKind::FileError{msg}             => write!(f, "{}", msg),
             ErrorKind::EmacsCallFailed            => write!(f, "calling Emacs failed"),
+            ErrorKind::PandocCallFailed           => write!(f, "calling Pandoc failed"),
             ErrorKind::PdfLatexCallFailed         => write!(f, "calling pdflatex failed"),
             ErrorKind::CodeBlockNotFound          => write!(f, "specified code block not found"),
             ErrorKind::AmbiguousCodeBlockName     => write!(f, "muliple code blocks match given name"),
