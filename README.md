@@ -90,7 +90,7 @@ fn main() {
 #+END_SRC
 
 #+FILE: foo.py
-#+INCLUDE: src/code.py
+#+INCLUDE: src/code.py src python
 ```
 Both code blocks(one of which is included from another file) will be written into two files with ```.``` as given format:
 ```
