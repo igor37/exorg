@@ -1,6 +1,6 @@
 [package]
 name = "exorg"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["Igor Harden <i.harden@gmx.at>"]
 
 [dependencies]

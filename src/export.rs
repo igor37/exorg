@@ -105,7 +105,9 @@ impl Exporter {
             let line = full_line.replace("\n", "");
 
             if line.starts_with("#+BEGIN_SRC") {
-                lang_name = Exporter::parse_begin_src(&line);
+                let tup = Exporter::parse_begin_src(&line);
+                lang_name  = tup.0;
+                block_file = tup.1;
                 src = true;
             } else if line.starts_with("#+END_SRC") {
                 src_blocks.push(SrcBlock {
@@ -125,13 +127,11 @@ impl Exporter {
                 block_name = Some(Exporter::parse_name(&line));
             } else if line.starts_with("#+DEPS:") {
                 block_deps = Exporter::parse_deps(&line);
-            } else if line.starts_with("#+FILE:") {
-                block_file = Some(Exporter::parse_filename(&line));
             } else if line.starts_with("#+SRC_LANG:") {
                 langs.push(Exporter::parse_src_lang(&line));
             } else if line.starts_with("#+INCLUDE:") {
                 Exporter::parse_include(&line, &mut src_blocks,
-                                        &mut langs, block_name, block_deps, block_file)?;
+                                        &mut langs, block_name, block_deps)?;
                 block_name = None;
                 block_file = None;
                 block_deps = Vec::new();
@@ -142,19 +142,35 @@ impl Exporter {
         Ok((src_blocks, langs))
     }
 
-    fn parse_begin_src(line: &String) -> Option<String> {
-        let lang_str: Option<String> = line.split(" ")
-                                    // skip the "#+BEGIN_SRC" phrase
-                                    .skip(1)
-                                    // discard empty strings which occur if
-                                    // multiple spaces are inbetween args
-                                    .filter(|n| n.len() > 0)
-                                    // flags like -i and -n not relevant here
-                                    .filter(|n| !(n.starts_with("-") &&
-                                                  n.len() == 2))
-                                    .nth(0)
-                                    .map(|s| s.to_string());
-        lang_str
+    fn parse_begin_src(line: &String) -> (Option<String>, Option<String>) {
+        let metadata = line.split(" ")
+                            // skip the "#+BEGIN_SRC" phrase
+                            .skip(1)
+                            // discard empty strings which occur if
+                            // multiple spaces are inbetween args
+                            .filter(|n| n.len() > 0)
+                            // flags like -i and -n not relevant here
+                            .filter(|n| !(n.starts_with("-") &&
+                                          n.len() == 2));
+
+        let remaining: Vec<String> = metadata.map(|s| s.to_string()).collect();
+        let lang_str: Option<String> = if remaining.len() > 0 {
+            Some(remaining[0].clone())
+        } else { None };
+        let mut filename: Option<String> = None;
+
+        for i in 0..remaining.len() {
+            if remaining[i] == ":tangle" && remaining.len() > i+1 {
+                match remaining[i+1].as_str() {
+                    "no"  => {},
+                    "yes" => {},
+                    name  => filename = Some(name.to_string()),
+                }
+                break;
+            }
+        }
+
+        (lang_str, filename)
     }
 
     fn parse_name(line: &String) -> String {
@@ -172,11 +188,6 @@ impl Exporter {
                 .collect()
     }
 
-    fn parse_filename(line: &String) -> String {
-        let trimmed = line.replace("#+FILE:", "");
-        trimmed.trim().to_string()
-    }
-
     fn parse_src_lang(line: &String) -> (String, String) {
         let mut trimmed = line.replace("#+SRC_LANG:", "");
         trimmed = trimmed.trim().to_string();
@@ -190,8 +201,7 @@ impl Exporter {
 
     fn parse_include(line: &String, src_blocks: &mut Vec<SrcBlock>,
                      langs: &mut Vec<(String, String)>,
-                     block_name: Option<String>, block_deps: Vec<String>,
-                     block_file: Option<String>) -> Result<(), ErrorKind> {
+                     block_name: Option<String>, block_deps: Vec<String>) -> Result<(), ErrorKind> {
         let args = line.split(" ")
                     .filter(|n| n.len() > 0)
                     .map(|n| n.to_string())
@@ -205,11 +215,17 @@ impl Exporter {
             let mut new_langs      = exporter.langs().clone();
             src_blocks.append(&mut new_src_blocks);
             langs.append(&mut new_langs);
-        } else if len == 4 &&
+        } else if len >= 4 &&
                   &args[2] == "src" { // src import
             let included_filename = &args[1];
             let lang  = args[3].clone();
             let lines = read_file(included_filename)?;
+
+            let block_file = if args.len() >= 6 && args[4] == ":tangle" {
+                Some(args[5].clone())
+            } else { None };
+
+
             let name  = match block_name {
                 Some(n) => n,
                 None    => String::new(),
@@ -223,7 +239,7 @@ impl Exporter {
                 filename: block_file,
             });
         }
-        // other variants if includes are assumed to contain no src code
+        // other variants of includes are assumed to contain no src code
         Ok(())
     }
 
@@ -539,7 +555,7 @@ impl Exporter {
             "csharp" | "c#" | "cs"    => format!("{}.cs", prefix),
             "css"                     => format!("{}.css", prefix),
             "d"                       => format!("{}.d", prefix),
-            "emacs-lisp"              => format!("{}.el", prefix),
+            "emacs-lisp" | "elisp"    => format!("{}.el", prefix),
             "go"                      => format!("{}.go", prefix),
             "html"                    => format!("{}.html", prefix),
             "java"                    => format!("{}.java", prefix),
@@ -548,8 +564,9 @@ impl Exporter {
             "julia"                   => format!("{}.jl", prefix),
             "jupyter"                 => format!("{}.ipynb", prefix),
             "latex"                   => format!("{}.tex", prefix),
+            "lisp"                    => format!("{}.lisp", prefix),
             "lua"                     => format!("{}.lua", prefix),
-            "markdown"                => format!("{}.md", prefix),
+            "markdown" | "md"         => format!("{}.md", prefix),
             "ocaml"                   => format!("{}.ml", prefix),
             "perl"                    => format!("{}.pl", prefix),
             "php"                     => format!("{}.php", prefix),
@@ -639,6 +656,6 @@ impl Exporter {
         clines.push("}".to_string());
 
         clines
-}
+    }
 
 }
