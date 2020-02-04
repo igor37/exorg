@@ -1,8 +1,7 @@
 # Exorg
-Small CLI tool for exporting org-mode documents.
 
-The main reason for its existence is that I like using Emacs not nearly as much as writing org-mode documents and wanted a simple 
-command(and keybindings in Vim) for easily exporting the contents.
+Small tool for exporting org-mode documents to PDF or source files
+directly from the terminal, without opening them manually in Emacs etc.
 
 # Features
 - LaTeX PDF export via Emacs or Pandoc
@@ -62,8 +61,7 @@ exorg python example.org -b foo
 exorg python example.org
 ```
 
-The ```.py``` file suffix is added automatically, the same works for a couple other popular languages. If not, the ```-n``` argument
-can be used to specify the file name manually.
+The ```.py``` file suffix is added automatically, the same works for a couple other popular languages.
 
 Exorg will autocomplete arguments for the ```-b``` flag if there is exactly one code block with a fitting name.
 
@@ -78,19 +76,17 @@ exorg jupyter foo.org -b block_name -o notebook.ipynb
 
 ### All code blocks
 
-Exorg introduces an additional header argument for source blocks, ```#+FILE```(curently Emacs-compatible as it's ignored). It specifies a
+Exorg uses Emacs Org-Mode's argument for source blocks, ```:tangle <file>```. It specifies a
 path/filename to which the block should be exported. Multiple blocks with the same path end up in the same file. This makes it
 possible to extract all source blocks simultaneously into new source files:
 ```
-#+FILE: main.rs
-#+BEGIN_SRC rust
+#+BEGIN_SRC rust :tangle main.rs
 fn main() {
     println!("Hello, World!");
 }
 #+END_SRC
 
-#+FILE: foo.py
-#+INCLUDE: src/code.py src python
+#+INCLUDE: src/code.py src python :tangle foo.py
 ```
 Both code blocks(one of which is included from another file) will be written into two files with ```.``` as given format:
 ```
